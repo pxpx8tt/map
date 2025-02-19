@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>豆瓣活动地图（简化分类）</title>
+    
+    <!-- Leaflet 核心库 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- CSV解析库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    
+    <style>
+        body { 
+            margin: 0; 
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            height: 100vh;
+            font-size: 16px;
+        }
+        
+        #map-container {
+            flex: 1;
+            position: relative;
+        }
+        
+        #map { 
+            height: 100%;
+            width: 100%;
+        }
+        
+        #content-panel {
+            width: 400px;
+            overflow-y: auto;
+            background-color: #f5f5f5;
+            padding: 15px;
+            box-sizing: border-box;
+        }
+        
+        #content-display {
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 60px;
+        }
+        
+        #event-title {
+            margin: 0 0 10px 0;
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        
+        #event-content {
+            line-height: 1.6;
+            color: #666;
+        }
+        
+        /* 标记样式 */
+        .custom-rect-marker {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* 图例样式 */
+        .legend {
+            padding: 8px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            font-size: 0.9em;
+            max-height: 30vh;
+            overflow-y: auto;
+        }
+        
+        .legend span {
+            display: inline-block;
+            width: 30px;
+            height: 12px;
+            margin-right: 5px;
+            border-radius: 4px;
+        }
+        
+        #timeline {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            width: 200px;  
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        #monthSelector {
+            width: 100%;
+            padding: 8px;
+            font-size: 14px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #1a1a1a;
+                color: #fff;
+            }
+            
+            #content-panel {
+                background-color: #2d2d2d;
+            }
+            
+            #content-display {
+                background: #333;
+            }
+            
+            #event-title {
+                color: #fff;
+            }
+            
+            #event-content {
+                color: #ddd;
+            }
+            
+            .legend {
+                background: #333;
+                color: #fff;
+            }
+            
+            #timeline {
+                background: #333;
+            }
+            
+            #monthSelector {
+                background: #444;
+                color: #fff;
+                border-color: #555;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="map-container">
+        <div id="map"></div>
+        <div id="timeline">
+            <select id="monthSelector">
+                <option value="all">全部时间</option>
+            </select>
+        </div>
+    </div>
+    <div id="content-panel">
+        <div id="content-display">
+            <h2 id="event-title">欢迎</h2>
+            <div id="event-content">
+                <p class="no-content">点击地图上的标记查看活动详情</p>
+                <p class="no-content" style="color: #666; margin-top: 10px; font-size: 0.9em;">使用底部时间选择器，可以按月份筛选查看不同时期的活动</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 初始化地图
+        const map = L.map('map').setView([39.9042, 116.4074], 11);
+        
+        let allMarkers = [];
+        let monthList = new Set();
+
+        // 使用 CartoDB 的浅色底图
+        L.tileLayer('http://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="http://cartodb.com/attributions">CartoDB</a>',
+            subdomains: 'abcd',
+            maxZoom: 19
+        }).addTo(map);
+
+        // 颜色生成器
+        const categoryColors = {
+            '展览': '#4CAF50',  // 绿色
+            '戏剧': '#2196F3',  // 蓝色
+            '旅行': '#FF9800',  // 橙色
+            '音乐': '#9C27B0',  // 紫色
+            '聚会': '#F44336',  // 红色
+            '亲子': '#00BCD4',  // 青色
+            '其他': '#757575',  // 灰色
+            '公益': '#8BC34A',  // 浅绿
+            '课程': '#3F51B5',  // 靛蓝
+            '运动': '#FFC107',  // 琥珀
+            '赛事': '#E91E63'   // 粉色
+        };
+
+        const generateColor = (category) => {
+            return categoryColors[category] || '#757575';  // 如果找不到对应颜色，返回灰色
+        };
+
+        // 更新右侧面板内容
+        const updateContentPanel = (event) => {
+            const title = document.getElementById('event-title');
+            const content = document.getElementById('event-content');
+            
+            title.textContent = event.event_name;
+            
+            let contentHTML = `
+                <p><strong>时间：</strong>${new Date(event.startdate).toLocaleDateString()} - 
+                ${new Date(event.enddate).toLocaleDateString()}</p>
+                <p><strong>地址：</strong>${event.address}</p>
+                <p><strong>费用：</strong>${event.fee ? `¥${parseFloat(event.fee.replace('元', '')).toFixed(2)}` : '免费'}</p>
+                <hr>
+                <div style="white-space: pre-wrap;">${event.content || '暂无详细内容'}</div>
+            `;
+            
+            content.innerHTML = contentHTML;
+            document.getElementById('content-panel').scrollTop = 0;
+        };
+
+        // 加载数据
+        Papa.parse('events03allcontent.csv', {
+            download: true,
+            header: true,
+            dynamicTyping: true,
+            complete: function(results) {
+                const allTypes = new Set();
+                
+                // 处理原始数据
+                results.data.forEach(event => {
+                    if (event.lon && event.lat) {
+                        const startDate = new Date(event.startdate);
+                        const monthKey = `${startDate.getFullYear()}-${(startDate.getMonth()+1).toString().padStart(2, '0')}`;
+                        monthList.add(monthKey);
+                    }
+                });
+
+                // 生成月份选项
+                const sortedMonths = Array.from(monthList).sort().reverse();
+                const select = document.getElementById('monthSelector');
+                sortedMonths.forEach(month => {
+                    const option = document.createElement('option');
+                    option.value = month;
+                    option.textContent = month;
+                    select.appendChild(option);
+                });
+
+                // 创建标记
+                allMarkers = results.data
+                    .filter(event => event.lon && event.lat)
+                    .map(event => {
+                        const startDate = new Date(event.startdate);
+                        const monthKey = `${startDate.getFullYear()}-${(startDate.getMonth()+1).toString().padStart(2, '0')}`;
+                        
+                        const eventType = event.category_simple;  // 使用简化后的类别
+                        if (!eventType) {
+                            console.log('Missing category for event:', event);
+                            return null;  // 跳过没有类别的事件
+                        }
+                        
+                        allTypes.add(eventType);
+
+                        // 创建标记
+                        const icon = L.divIcon({
+                            className: 'custom-rect-marker',
+                            html: `<div style="background:${generateColor(eventType)}; padding: 4px 12px; border-radius: 8px; color: white; font-weight: bold; font-size: 14px; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">${eventType}</div>`
+                        });
+
+                        const marker = L.marker([event.lat, event.lon], { 
+                            icon,
+                            monthKey: monthKey
+                        });
+
+                        marker.on('click', () => {
+                            updateContentPanel(event);
+                        });
+
+                        return marker;
+                    })
+                    .filter(marker => marker !== null);  // 过滤掉空的标记
+
+                // 初始显示
+                const featureGroup = L.featureGroup(allMarkers).addTo(map);
+                map.fitBounds(featureGroup.getBounds().pad(0.2));
+
+                // 生成图例
+                const legend = L.control({ position: 'bottomright' });
+                legend.onAdd = () => {
+                    const div = L.DomUtil.create('div', 'legend');
+                    div.innerHTML = `<h4>活动类型</h4>${
+                        Array.from(allTypes).sort().map(type => `
+                            <div>
+                                <span style="background:${generateColor(type)};
+                                    display:inline-block;
+                                    width:30px;
+                                    height:12px;
+                                    margin-right:5px;
+                                    border-radius:4px;
+                                "></span>
+                                ${type}
+                            </div>
+                        `).join('')
+                    }`;
+                    return div;
+                };
+                legend.addTo(map);
+            }
+        });
+
+        // 时间轴筛选功能
+        document.getElementById('monthSelector').addEventListener('change', function() {
+            const selectedMonth = this.value;
+            allMarkers.forEach(marker => {
+                if (selectedMonth === 'all' || marker.options.monthKey === selectedMonth) {
+                    marker.addTo(map);
+                } else {
+                    marker.remove();
+                }
+            });
+        });
+    </script>
+</body>
+</html>
