@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>豆瓣活动地图</title>
+    
+    <!-- Leaflet 核心库 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- CSV解析库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { height: 100vh; width: 100vw; }
+        .legend {
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        .custom-rect-marker {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2px 8px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            white-space: nowrap;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <script>
+        // 初始化地图（以北京为中心）
+        const map = L.map('map').setView([39.9042, 116.4074], 11);
+
+        // 使用 Stadia.AlidadeSmooth 底图
+        L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png', {
+            attribution: '© <a href="https://stadiamaps.com/">Stadia Maps</a> © <a href="https://openmaptiles.org/">OpenMapTiles</a> © <a href="https://openstreetmap.org">OpenStreetMap</a> contributors',
+            maxZoom: 20
+        }).addTo(map);
+
+        // 动态颜色生成器
+        const typeColors = new Map();
+        const generateColor = (str) => {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            const h = hash % 360;
+            return `hsl(${h}, 70%, 50%)`; // 使用HSL颜色确保高对比度
+        };
+
+        // 存储所有类型用于图例
+        const allTypes = new Set();
+
+        // 加载并解析CSV数据
+        Papa.parse('events.csv', {
+            download: true,
+            header: true,
+            dynamicTyping: true,
+            complete: function(results) {
+                const markers = results.data
+                    .filter(event => event.lon && event.lat)
+                    .map(event => {
+                        // 动态生成颜色
+                        const eventType = event.event_type || '其他';
+                        allTypes.add(eventType);
+                        
+                        if (!typeColors.has(eventType)) {
+                            typeColors.set(eventType, generateColor(eventType));
+                        }
+                        const color = typeColors.get(eventType);
+
+                        // 创建标记
+                        const icon = L.divIcon({
+                            className: 'custom-rect-marker',
+                            html: `<div style="background:${color}">${eventType}</div>`
+                        });
+
+                        // 创建弹窗内容
+                        const fee = event.fee ? 
+                            `¥${parseFloat(event.fee.replace('元', '')).toFixed(2)}` : 
+                            '免费';
+                            
+                        const popupContent = `
+                            <h3>${event.event_name}</h3>
+                            <hr>
+                            <b>时间：</b>${new Date(event.startdate).toLocaleDateString()} - 
+                            ${new Date(event.enddate).toLocaleDateString()}<br>
+                            <b>地址：</b>${event.address}<br>
+                            <b>费用：</b>${fee}
+                        `;
+
+                        // 创建标记并强制显示弹窗
+                        const marker = L.marker([event.lat, event.lon], { icon })
+                            .bindPopup(popupContent)
+                            .openPopup(); // 强制打开弹窗
+
+                        // 防止弹窗自动关闭
+                        marker.on('popupclose', () => marker.openPopup());
+                        return marker;
+                    });
+
+                // 添加所有标记到地图
+                const featureGroup = L.featureGroup(markers).addTo(map);
+                
+                // 自动调整地图范围（增加20%边距）
+                map.fitBounds(featureGroup.getBounds().pad(0.2));
+
+                // 生成图例
+                const legend = L.control({ position: 'bottomright' });
+                legend.onAdd = () => {
+                    const div = L.DomUtil.create('div', 'legend');
+                    div.innerHTML = `<h4>活动类型</h4>${
+                        Array.from(allTypes).map(type => `
+                            <div>
+                                <span style="
+                                    background:${typeColors.get(type)};
+                                    display:inline-block;
+                                    width:20px;
+                                    height:15px;
+                                    margin-right:5px;
+                                    border-radius:3px">
+                                </span>
+                                ${type}
+                            </div>
+                        `).join('')
+                    }`;
+                    return div;
+                };
+                legend.addTo(map);
+            }
+        });
+    </script>
+</body>
+</html>

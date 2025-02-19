@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>豆瓣活动地图（含时间详情）</title>
+    
+    <!-- MapLibre GL JS 核心库 -->
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.css" />
+    <script src="https://unpkg.com/maplibre-gl@latest/dist/maplibre-gl.js"></script>
+    
+    <!-- CSV解析库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { height: 100vh; width: 100vw; }
+        .legend {
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+        }
+        .custom-rect-marker {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2px 8px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            white-space: nowrap;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        #timeline {
+            position: absolute;
+            bottom: 30px;
+            left: 20px;
+            z-index: 1000;
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        #monthSelector {
+            width: 300px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="timeline">
+        <h4>选择月份：</h4>
+        <select id="monthSelector">
+            <option value="all">全部时间</option>
+        </select>
+    </div>
+
+    <script>
+        const parseDateTime = (dateOri) => {
+            try {
+                const match = dateOri.match(/(\d{4}年\d{2}月\d{2}日).*?(\d{2}:\d{2}).*?(\d{4}年\d{2}月\d{2}日).*?(\d{2}:\d{2})/);
+                if (!match) return null;
+
+                const [_, startDateStr, startTime, endDateStr, endTime] = match;
+                
+                const startDate = new Date(startDateStr.replace(/年|月/g, '-').replace('日', ''));
+                const endDate = new Date(endDateStr.replace(/年|月/g, '-').replace('日', ''));
+                
+                const isSameDay = startDate.toDateString() === endDate.toDateString();
+                
+                return isSameDay ? {
+                    date: `${startDate.getFullYear()}-${(startDate.getMonth()+1).toString().padStart(2,'0')}-${startDate.getDate().toString().padStart(2,'0')}`,
+                    timeRange: `${startTime} - ${endTime}`
+                } : null;
+            } catch {
+                return null;
+            }
+        };
+
+        // 初始化地图
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: 'https://api.maptiler.com/maps/streets/style.json?key=0xdlPHs1jPHTqOjqprXb',
+            center: [116.4074, 39.9042],
+            zoom: 11
+        });
+
+        let allMarkers = [];
+        let monthList = new Set();
+
+        // 颜色生成器保持不变
+        const generateColor = (str) => {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            return `hsl(${hash % 360}, 70%, 50%)`;
+        };
+
+        // 加载数据
+        Papa.parse('events02all.csv', {
+            download: true,
+            header: true,
+            dynamicTyping: true,
+            complete: function(results) {
+                const typeColors = new Map();
+                const allTypes = new Set();
+                
+                // 处理原始数据
+                results.data.forEach(event => {
+                    if (event.lon && event.lat) {
+                        const startDate = new Date(event.startdate);
+                        const monthKey = `${startDate.getFullYear()}-${(startDate.getMonth()+1).toString().padStart(2, '0')}`;
+                        monthList.add(monthKey);
+                    }
+                });
+
+                // 生成月份选项
+                const sortedMonths = Array.from(monthList).sort();
+                const select = document.getElementById('monthSelector');
+                sortedMonths.forEach(month => {
+                    const option = document.createElement('option');
+                    option.value = month;
+                    option.textContent = month;
+                    select.appendChild(option);
+                });
+
+                // 创建标记
+                allMarkers = results.data
+                    .filter(event => event.lon && event.lat)
+                    .map(event => {
+                        const startDate = new Date(event.startdate);
+                        const monthKey = `${startDate.getFullYear()}-${(startDate.getMonth()+1).toString().padStart(2, '0')}`;
+                        
+                        const eventType = event.event_type || '其他';
+                        allTypes.add(eventType);
+                        if (!typeColors.has(eventType)) {
+                            typeColors.set(eventType, generateColor(eventType));
+                        }
+
+                        const fee = event.fee ? `¥${parseFloat(event.fee.replace('元', '')).toFixed(2)}` : '免费';
+                        
+                        const timeInfo = event.date_ori ? parseDateTime(event.date_ori) : null;
+                        
+                        let popupContent = `
+                            <h3>${event.event_name}</h3>
+                            <hr>
+                            <b>时间：</b>${startDate.toLocaleDateString()} - 
+                            ${new Date(event.enddate).toLocaleDateString()}<br>
+                        `;
+                        
+                        if (timeInfo) {
+                            popupContent += `
+                                <b>具体时间：</b>${timeInfo.date} ${timeInfo.timeRange}<br>
+                            `;
+                        }
+                        
+                        popupContent += `
+                            <b>地址：</b>${event.address}<br>
+                            <b>费用：</b>${fee}
+                        `;
+
+                        const marker = new maplibregl.Marker()
+                            .setLngLat([event.lon, event.lat])
+                            .setPopup(new maplibregl.Popup().setHTML(popupContent))
+                            .addTo(map);
+
+                        return {
+                            marker,
+                            monthKey
+                        };
+                    });
+
+                // 初始显示
+                const bounds = allMarkers.reduce((acc, { marker }) => {
+                    return acc.extend(marker.getLngLat());
+                }, new maplibregl.LngLatBounds([116.4, 39.9], [116.5, 40.0]));
+
+                map.fitBounds(bounds, {
+                    padding: 200
+                });
+
+                // 生成图例
+                const legend = document.createElement('div');
+                legend.className = 'legend';
+                legend.innerHTML = `<h4>活动类型</h4>${
+                    Array.from(allTypes).map(type => `
+                        <div>
+                            <span style="background:${typeColors.get(type)};
+                                display:inline-block;
+                                width:20px;
+                                height:15px;
+                                margin-right:5px;
+                                border-radius:3px">
+                            </span>${type}
+                        </div>`
+                    ).join('')
+                }`;
+                document.body.appendChild(legend);
+            }
+        });
+
+        // 时间轴筛选功能
+        document.getElementById('monthSelector').addEventListener('change', function() {
+            const selectedMonth = this.value;
+            
+            allMarkers.forEach(({ marker, monthKey }) => {
+                if (selectedMonth === 'all' || monthKey === selectedMonth) {
+                    if (!map.getSource(marker.getId())) {
+                        marker.addTo(map);
+                    }
+                } else {
+                    if (map.getSource(marker.getId())) {
+                        marker.remove();
+                    }
+                }
+            });
+            
+            const visibleMarkers = allMarkers.filter(({ marker }) => 
+                map.getSource(marker.getId())
+            );
+            if (visibleMarkers.length > 0) {
+                const bounds = visibleMarkers.reduce((acc, { marker }) => {
+                    return acc.extend(marker.getLngLat());
+                }, new maplibregl.LngLatBounds([116.4, 39.9], [116.5, 40.0]));
+                map.fitBounds(bounds, {
+                    padding: 200
+                });
+            }
+        });
+    </script>
+</body>
+</html>

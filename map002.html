@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>豆瓣活动地图</title>
+    
+    <!-- Leaflet 核心库 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- 标记聚类插件 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+    
+    <!-- CSV解析库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { height: 100vh; width: 100vw; }
+        .legend {
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        .leaflet-popup-content h3 {
+            margin: 0 0 8px 0;
+            color: #0078A8;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <script>
+        // 初始化地图（以北京为中心）
+        const map = L.map('map').setView([39.9042, 116.4074], 11);
+
+        // 添加浅色的 OpenStreetMap 底图
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> | &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        }).addTo(map);
+
+        // 创建标记聚类组
+        const markers = L.markerClusterGroup({
+            showCoverageOnHover: false,
+            maxClusterRadius: 60
+        });
+
+        // 加载并解析CSV数据
+        Papa.parse('douban_demo.csv', {  // 确保CSV文件名正确
+            download: true,
+            header: true,
+            dynamicTyping: true,
+            complete: function(results) {
+                results.data.forEach(event => {
+                    // 验证坐标数据有效性
+                    if (event.lon && event.lat) {
+                        // 日期格式化函数
+                        const formatDate = (isoString) => {
+                            const date = new Date(isoString);
+                            return date.toLocaleDateString('zh-CN', {
+                                year: 'numeric',
+                                month: '2-digit',
+                                day: '2-digit'
+                            });
+                        };
+
+                        // 创建自定义图标
+                        const customIcon = L.divIcon({
+                            className: 'custom-marker',
+                            html: `<div style="background:#${getRandomColor()}; 
+                                   width:28px; height:28px; border-radius:50%;
+                                   display:flex; align-items:center; justify-content:center;
+                                   color:white; font-weight:bold; border:2px solid white">
+                                   ${event.event_name.substring(0,1)}</div>`
+                        });
+
+                        // 创建标记并绑定弹窗
+                        const marker = L.marker(
+                            [event.lat, event.lon],
+                            { icon: customIcon }
+                        ).bindPopup(`
+                            <h3>${event.event_name}</h3>
+                            <hr>
+                            <b>活动时间：</b><br>
+                            ${formatDate(event.startdate)} - ${formatDate(event.enddate)}<br>
+                            <b>活动地址：</b><br>${event.address}<br>
+                            <b>坐标：</b>${event.lat.toFixed(6)}, ${event.lon.toFixed(6)}
+                        `);
+
+                        markers.addLayer(marker);
+                    }
+                });
+                
+                map.addLayer(markers);
+                // 自动调整地图范围包含所有标记
+                if (markers.getBounds().isValid()) {
+                    map.fitBounds(markers.getBounds());
+                }
+            }
+        });
+
+        // 添加图例控件
+        const legend = L.control({ position: 'bottomright' });
+        legend.onAdd = function() {
+            const div = L.DomUtil.create('div', 'legend');
+            div.innerHTML = `
+                <h4>地图说明</h4>
+                • 标记首字母：活动名称首字<br>
+                • 点击标记查看详细信息<br>
+                • 拖动/滚轮缩放地图<br>
+                • 集群表示多个活动集中区域
+            `;
+            return div;
+        };
+        legend.addTo(map);
+
+        // 随机颜色生成器
+        function getRandomColor() {
+            return Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+        }
+    </script>
+</body>
+</html>

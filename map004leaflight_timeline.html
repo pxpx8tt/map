@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>豆瓣活动地图（含时间详情）</title>
+    
+    <!-- Leaflet 核心库 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- CSV解析库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    
+    <style>
+        /* 原有样式保持不变 */
+        body { margin: 0; padding: 0; }
+        #map { height: 100vh; width: 100vw; }
+        .legend {
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        .custom-rect-marker {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2px 8px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            white-space: nowrap;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        #timeline {
+            position: absolute;
+            bottom: 30px;
+            left: 20px;
+            z-index: 1000;
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        #monthSelector {
+            width: 300px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="timeline">
+        <h4>选择月份：</h4>
+        <select id="monthSelector">
+            <option value="all">全部时间</option>
+        </select>
+    </div>
+
+    <script>
+        // 新增时间解析函数
+        const parseDateTime = (dateOri) => {
+            try {
+                // 使用正则表达式提取时间信息
+                const match = dateOri.match(/(\d{4}年\d{2}月\d{2}日).*?(\d{2}:\d{2}).*?(\d{4}年\d{2}月\d{2}日).*?(\d{2}:\d{2})/);
+                if (!match) return null;
+
+                const [_, startDateStr, startTime, endDateStr, endTime] = match;
+                
+                // 转换为Date对象
+                const startDate = new Date(startDateStr.replace(/年|月/g, '-').replace('日', ''));
+                const endDate = new Date(endDateStr.replace(/年|月/g, '-').replace('日', ''));
+                
+                // 判断是否为同一天
+                const isSameDay = startDate.toDateString() === endDate.toDateString();
+                
+                return isSameDay ? {
+                    date: `${startDate.getFullYear()}-${(startDate.getMonth()+1).toString().padStart(2,'0')}-${startDate.getDate().toString().padStart(2,'0')}`,
+                    timeRange: `${startTime} - ${endTime}`
+                } : null;
+            } catch {
+                return null;
+            }
+        };
+
+        // 初始化地图
+        const map = L.map('map').setView([39.9042, 116.4074], 11);
+        let allMarkers = [];
+        let monthList = new Set();
+
+        // 底图配置保持不变
+        L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png', {
+            attribution: '© <a href="https://stadiamaps.com/">Stadia Maps</a> © <a href="https://openmaptiles.org/">OpenMapTiles</a> © <a href="https://openstreetmap.org">OpenStreetMap</a> contributors',
+            maxZoom: 20
+        }).addTo(map);
+
+        // 颜色生成器保持不变
+        const generateColor = (str) => {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            return `hsl(${hash % 360}, 70%, 50%)`;
+        };
+
+        // 加载数据（文件名已更新为events02all.csv）
+        Papa.parse('events02all.csv', {
+            download: true,
+            header: true,
+            dynamicTyping: true,
+            complete: function(results) {
+                const typeColors = new Map();
+                const allTypes = new Set();
+                
+                // 处理原始数据（新增date_ori处理）
+                results.data.forEach(event => {
+                    if (event.lon && event.lat) {
+                        // 解析日期
+                        const startDate = new Date(event.startdate);
+                        const monthKey = `${startDate.getFullYear()}-${(startDate.getMonth()+1).toString().padStart(2, '0')}`;
+                        monthList.add(monthKey);
+                    }
+                });
+
+                // 生成月份选项（保持不变）
+                const sortedMonths = Array.from(monthList).sort();
+                const select = document.getElementById('monthSelector');
+                sortedMonths.forEach(month => {
+                    const option = document.createElement('option');
+                    option.value = month;
+                    option.textContent = month;
+                    select.appendChild(option);
+                });
+
+                // 创建标记（新增date_ori处理）
+                allMarkers = results.data
+                    .filter(event => event.lon && event.lat)
+                    .map(event => {
+                        const startDate = new Date(event.startdate);
+                        const monthKey = `${startDate.getFullYear()}-${(startDate.getMonth()+1).toString().padStart(2, '0')}`;
+                        
+                        // 动态生成颜色（保持不变）
+                        const eventType = event.event_type || '其他';
+                        allTypes.add(eventType);
+                        if (!typeColors.has(eventType)) {
+                            typeColors.set(eventType, generateColor(eventType));
+                        }
+
+                        // 创建弹窗内容（新增时间详情）
+                        const fee = event.fee ? `¥${parseFloat(event.fee.replace('元', '')).toFixed(2)}` : '免费';
+                        
+                        // 解析date_ori
+                        const timeInfo = event.date_ori ? parseDateTime(event.date_ori) : null;
+                        
+                        // 构建弹窗HTML
+                        let popupContent = `
+                            <h3>${event.event_name}</h3>
+                            <hr>
+                            <b>时间：</b>${startDate.toLocaleDateString()} - 
+                            ${new Date(event.enddate).toLocaleDateString()}<br>
+                        `;
+                        
+                        if (timeInfo) {
+                            popupContent += `
+                                <b>具体时间：</b>${timeInfo.date} ${timeInfo.timeRange}<br>
+                            `;
+                        }
+                        
+                        popupContent += `
+                            <b>地址：</b>${event.address}<br>
+                            <b>费用：</b>${fee}
+                        `;
+
+                        // 创建标记
+                        const icon = L.divIcon({
+                            className: 'custom-rect-marker',
+                            html: `<div style="background:${typeColors.get(eventType)}">${eventType}</div>`
+                        });
+
+                        const marker = L.marker([event.lat, event.lon], { 
+                            icon,
+                            monthKey: monthKey
+                        }).bindPopup(popupContent);
+                        
+                        return marker;
+                    });
+
+                // 初始显示（保持不变）
+                const featureGroup = L.featureGroup(allMarkers).addTo(map);
+                map.fitBounds(featureGroup.getBounds().pad(0.2));
+
+                // 在地图加载完成后打开所有标记的弹窗
+                setTimeout(() => {
+                    allMarkers.forEach(marker => {
+                        marker.openPopup();
+                    });
+                }, 1000);  // 给予足够的时间让地图完全加载
+
+                // 生成图例（保持不变）
+                const legend = L.control({ position: 'bottomright' });
+                legend.onAdd = () => {
+                    const div = L.DomUtil.create('div', 'legend');
+                    div.innerHTML = `<h4>活动类型</h4>${
+                        Array.from(allTypes).map(type => `
+                            <div>
+                                <span style="background:${typeColors.get(type)};
+                                    display:inline-block;
+                                    width:20px;
+                                    height:15px;
+                                    margin-right:5px;
+                                    border-radius:3px">
+                                </span>${type}
+                            </div>`
+                        ).join('')
+                    }`;
+                    return div;
+                };
+                legend.addTo(map);
+            }
+        });
+
+        // 时间轴筛选功能（保持不变）
+        document.getElementById('monthSelector').addEventListener('change', function() {
+            const selectedMonth = this.value;
+            
+            allMarkers.forEach(marker => {
+                if (selectedMonth === 'all' || marker.options.monthKey === selectedMonth) {
+                    if (!map.hasLayer(marker)) marker.addTo(map);
+                } else {
+                    if (map.hasLayer(marker)) map.removeLayer(marker);
+                }
+            });
+            
+            const visibleMarkers = allMarkers.filter(marker => 
+                map.hasLayer(marker)
+            );
+            if (visibleMarkers.length > 0) {
+                const bounds = L.featureGroup(visibleMarkers).getBounds();
+                map.fitBounds(bounds.isValid() ? bounds : [[39.9, 116.4], [40.0, 116.5]]);
+            }
+        });
+    </script>
+</body>
+</html>
