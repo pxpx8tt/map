@@ -302,7 +302,7 @@
                 });
 
                 // 生成月份选项
-                const sortedMonths = Array.from(monthList).sort();
+                const sortedMonths = Array.from(monthList).sort().reverse();
                 const select = document.getElementById('monthSelector');
                 sortedMonths.forEach(month => {
                     const option = document.createElement('option');
